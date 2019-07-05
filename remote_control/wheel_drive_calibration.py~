@@ -1,0 +1,371 @@
+import sys,os
+sys.path.insert(0,"/home/pi/nfs/remote_control/remote_control/driver")
+from PCA9685 import PWM
+import time
+import curses
+import pickle
+
+
+class WheelCalibration(object):
+    '''
+    This class is made to use ESC device in Raspberry Pi.
+    Becareful when you connect ESC to your Raspberry Pi board.
+    It needs very large current, it can make broken your circuit.
+
+    '''
+    def __init__(self, drive, steer, bus_number=None, address=0x40, frequency = 60, drive_ch = 0, steer_ch = 1):
+        ''' This is very important part of set ESC.
+        If you want to drive motor by this source, you have to use pca9685 drive.
+        Because the ESC circuit is connected with PCA9685 PWM circuit board's channel pins
+
+        Argument
+        bus_number : bus type of raspberry Pi. If it doesn't set, pca9685 module set value as default.
+        address : I2C slave address
+        frequency : driving motor(forward/backward motor) PWM frequency.
+        driver : pca9685 channel number of driving motor
+        steer : pca9685 channel number of steering motor
+        '''
+
+        #mode - 0 : forward, 1 : backward, 2 : Neutral, 3 : None
+        self.set_mode = 3
+        self.steer_value_loaded = False
+        self.drive_value_loaded = False
+        self.current_mode = ["Forward", "Backward", "Neutral", "None"]
+
+        #Set Channel
+        self.drive_ch = drive_ch 
+        self.steer_ch = steer_ch
+
+        #Default values for steer
+        #self.steer_NEUTRAL = 390 
+        self.steer_center = steer
+        self.steer_MIN = 280
+        self.steer_MAX = 500
+        self.steer_val = 0
+        self.steer_diff = 15
+
+        #Default values for drive(engine)
+        #self.drive_NEUTRAL = 369 
+        self.drive_neutral = drive 
+        self.drive_MIN = 280
+        self.drive_MAX = 450
+        #self.drive_val = self.drive_neutral
+        self.speed_forward = 0
+        self.speed_backward = 0
+        self.drive_diff = 5
+
+        # PWM init
+        self.pwm = PWM(bus_number, address)
+        self.pwm.frequency = frequency
+        self.pwm.setup()
+        time.sleep(0.1)
+        self.pwm.write(self.drive_ch,0,0)
+        self.pwm.write(self.steer_ch,0,0)
+
+    """
+    def left(self):
+        if(self.steer_value_loaded == True):
+            if self.steer_val < self.steer_MAX:
+                self.steer_val += self.steer_diff
+                if self.steer_val > self.steer_MAX:
+                    self.steer_val = self.steer_MAX
+        self.pwm.write(self.steer_ch,0,self.steer_val)
+        
+    def right(self):
+        if(self.steer_value_loaded == True):
+            if self.steer_val > self.steer_MIN:
+                self.steer_val -= self.steer_diff
+                if self.steer_val < self.steer_MIN :
+                    self.steer_val = self.steer_MIN
+        self.pwm.write(self.steer_ch,0,self.steer_val)
+    """
+    def left(self):
+        if(self.steer_value_loaded == True):
+            self.steer_val += self.steer_diff
+
+            if self.steer_val >= self.steer_MAX:
+                self.steer_val = self.steer_MAX
+            else:                
+                self.pwm.write(self.steer_ch,0,self.steer_val)
+        
+    def right(self):
+        if(self.steer_value_loaded == True):
+            self.steer_val -= self.steer_diff
+
+            if self.steer_val <= self.steer_MIN :
+                self.steer_val = self.steer_MIN
+            else:
+                self.pwm.write(self.steer_ch,0,self.steer_val)
+
+
+    def set_steer_center(self):
+        self.steer_val = self.steer_center
+        self.pwm.write(self.steer_ch,0,self.steer_val)
+        time.sleep(0.1)
+        self.pwm.write(self.steer_ch,0,0)
+        self.steer_value_loaded = True
+
+    def increase_speed(self):
+        if(self.set_mode == 0): #if forward
+            if self.speed_forward < self.drive_MAX:
+                self.speed_forward += self.drive_diff
+                if self.speed_forward > self.drive_MAX:
+                    self.speed_forward = self.drive_MAX
+            self.pwm.write(self.drive_ch, 0, self.speed_forward)        
+        elif(self.set_mode == 1): #if backward
+            if self.speed_backward > self.drive_MIN:
+                self.speed_backward -= self.drive_diff
+                if self.speed_backward < self.drive_MIN :
+                    self.speed_backward = self.drive_MIN
+            self.pwm.write(self.drive_ch, 0, self.speed_backward)        
+        else:
+            pass
+        
+
+    def decrease_speed(self):
+        if(self.set_mode == 0): #if forward
+            """
+            if self.speed_forward > self.drive_neutral:
+                self.speed_forward -= self.drive_diff
+                if self.speed_forward < self.drive_neutral:
+                    self.speed_forward = self.drive_neutral
+            """
+            if self.speed_forward > self.drive_MIN:
+                self.speed_forward -= self.drive_diff
+                                    
+            self.pwm.write(self.drive_ch, 0, self.speed_forward)
+
+        elif(self.set_mode == 1): #if backward
+            """
+            if self.speed_backward < self.drive_neutral:
+                self.speed_backward += self.drive_diff
+                if self.speed_backward > self.drive_neutral :
+                    self.speed_backward = self.drive_neutral
+            """
+            if self.speed_backward < self.drive_MAX:
+                self.speed_backward += self.drive_diff        
+            self.pwm.write(self.drive_ch, 0, self.speed_backward)                    
+        else:
+            pass
+
+    def set_drive_forward(self):
+        if(self.drive_value_loaded == True):
+            if(self.set_mode == 2 or self.set_mode == 3):
+                self.set_mode = 0
+
+    def set_drive_backward(self):
+        if(self.drive_value_loaded == True):
+            if(self.set_mode == 2 or self.set_mode == 3):
+                self.set_mode = 1
+
+    def set_drive_neutral(self):
+        self.set_mode = 2
+        self.pwm.write(self.drive_ch, 0,self.drive_neutral)
+        self.speed_forward = self.drive_neutral
+        self.speed_backward = self.drive_neutral
+        self.drive_value_loaded = True
+    
+    """
+    def set_speed_manually(self,speed):
+        self.pwm.write(self.drive_ch, 0,speed)
+
+    def set_steer_manually(self,steer):
+        self.pwm.write(self.drive_ch, 0,steer)
+    """
+    
+    def pwm_off(self):
+        self.pwm.write(self.drive_ch, 0,0)
+        self.pwm.write(self.steer_ch, 0,0)
+        self.set_mode = 3
+
+
+def get_stored_value():
+    try:
+        file = open('./calibration_data', 'r+b')
+        drive_neutral = pickle.load(file)
+        steer_center = pickle.load(file)
+        file.close
+    except:
+        drive_neutral = 369
+        steer_center = 390
+
+    return drive_neutral, steer_center
+
+
+     
+def save_current_value(wheel_set, drive_neutral, steer_center):    
+    file = open('./calibration_data', 'w+b')
+    pickle.dump(drive_neutral, file)
+    pickle.dump(steer_center, file)
+    file.close
+    wheel_set.drive_neutral = drive_neutral
+    wheel_set.steer_center = steer_center
+    
+
+def refresh_screen(stdscr):
+    # Clear and refresh the screen for a blank canvas
+    stdscr.clear()
+    stdscr.refresh()
+
+    # Start colors in curses
+    curses.start_color()
+    curses.init_pair(1, curses.COLOR_CYAN, curses.COLOR_BLACK)
+    curses.init_pair(2, curses.COLOR_RED, curses.COLOR_BLACK)
+    curses.init_pair(3, curses.COLOR_BLACK, curses.COLOR_WHITE)
+
+
+
+def draw_screen2(stdscr):
+    
+    k = 0
+
+    refresh_screen(stdscr)
+
+    drive, steer = get_stored_value()
+
+    wheel_set = WheelCalibration(drive, steer, 1, 0x40, 60, 10,11)
+
+
+    while (k != ord('q')):
+    
+        title = "Wheel Calibration"
+        subtitle = "Adjust steer to center and set initial speed"
+        
+        key_d_str = "D : Set Forward"
+        key_r_str = "R : Set Backward"
+        key_n_str = "N : Set Neutral"
+        key_square_open_str = "[ : Increase Speed"
+        key_square_close_str = "] : Decrease Speed"
+
+        key_c_str = "C : Set Steer Center"
+        key_right_str = "KEY_RIGHT : Turn Right"
+        key_left_str = "KEY_LEFT : Turn Left"
+
+        key_space_str = "SPACE : PWM Off"
+        key_s_str = "S : Save Current Setting"
+        key_q_str = "Q : Exit Program"
+
+        current_set_mode = "Mode : "
+        
+        # Initialization
+        stdscr.clear()
+        height, width = stdscr.getmaxyx()
+        
+        if k == ord('d'):
+            wheel_set.set_drive_forward()
+        elif k == ord('r'):
+            wheel_set.set_drive_backward()
+        elif k == ord('n'):
+            wheel_set.set_drive_neutral()
+        elif k == ord(' '):
+            wheel_set.pwm_off()  
+        elif k == curses.KEY_RIGHT:
+            wheel_set.right()
+        elif k == curses.KEY_LEFT:
+            wheel_set.left()
+        elif k == ord('c'):
+            wheel_set.set_steer_center()
+        elif k == ord('['):
+            wheel_set.increase_speed()
+        elif k == ord(']'):
+            wheel_set.decrease_speed()           
+        elif k == ord('s'):
+            if(wheel_set.drive_value_loaded == True and wheel_set.steer_value_loaded == True):
+                drive_neutral = wheel_set.speed_forward-((wheel_set.speed_forward-wheel_set.speed_backward)//2)
+                save_current_value(wheel_set,drive_neutral,wheel_set.steer_val)
+
+        mode_str = "Current Mode : {}".format(wheel_set.current_mode[wheel_set.set_mode])
+        setting_str = "Forward : {}, Backward : {}, Steer - {}".format(wheel_set.speed_forward,wheel_set.speed_backward,wheel_set.steer_val)
+
+        # Centering calculations
+        start_x_title = int((width // 2) - (len(title) // 2) - len(title) % 2)
+        start_x_subtitle = int((width // 2) - (len(subtitle) // 2) - len(subtitle) % 2)
+
+        start_x_d_str = int((width // 2) - (len(key_d_str) // 2) - len(key_d_str) % 2)
+        start_x_r_str = int((width // 2) - (len(key_r_str) // 2) - len(key_r_str) % 2)
+        start_x_n_str = int((width // 2) - (len(key_n_str) // 2) - len(key_n_str) % 2)
+        start_x_c_str = int((width//2) - (len(key_c_str)//2) - len(key_c_str) % 2)
+        start_x_right_str = int((width // 2) - (len(key_right_str) // 2) - len(key_right_str) % 2)
+        start_x_left_str = int((width // 2) - (len(key_left_str) // 2) - len(key_left_str) % 2)
+        start_x_so_str = int((width // 2) - (len(key_square_open_str) // 2) - len(key_square_open_str) % 2)        
+        start_x_sc_str = int((width // 2) - (len(key_square_close_str) // 2) - len(key_square_close_str) % 2)
+        start_x_space_str = int((width // 2) - (len(key_space_str) // 2) - len(key_space_str) % 2)        
+        start_x_s_str = int((width // 2) - (len(key_s_str) // 2) - len(key_s_str) % 2)
+        start_x_q_str = int((width // 2) - (len(key_q_str) // 2) - len(key_q_str) % 2)                
+        start_x_mode_str = int((width // 2) - (len(mode_str) // 2) - len(mode_str) % 2)
+        start_x_setting_str = int((width // 2) - (len(setting_str) // 2) - len(setting_str) % 2)
+        
+        start_y = int((height // 2) - 15)
+
+
+
+        """
+        Code for Title
+        """
+        # Turning on attributes for title
+        stdscr.attron(curses.color_pair(2))
+        stdscr.attron(curses.A_BOLD)
+
+        # Rendering title
+        stdscr.addstr(start_y, start_x_title, title)
+
+        # Turning off attributes for title
+        stdscr.attroff(curses.color_pair(2))
+        stdscr.attroff(curses.A_BOLD)
+
+
+        """
+        Code for Key explanation
+        """
+        # Print rest of text
+        stdscr.addstr(start_y + 1, start_x_subtitle, subtitle)
+        stdscr.addstr(start_y + 3, (width // 2) - 2, '-' * 4)
+
+        stdscr.addstr(start_y + 5, start_x_d_str, key_d_str)
+        stdscr.addstr(start_y + 7, start_x_r_str, key_r_str)
+        stdscr.addstr(start_y + 9, start_x_n_str, key_n_str)
+        stdscr.addstr(start_y + 11, start_x_c_str, key_c_str)
+        stdscr.addstr(start_y + 13, start_x_right_str, key_right_str)
+        stdscr.addstr(start_y + 15, start_x_left_str, key_left_str)
+        stdscr.addstr(start_y + 17, start_x_so_str, key_square_open_str)
+        stdscr.addstr(start_y + 19, start_x_sc_str, key_square_close_str)
+        stdscr.addstr(start_y + 21, start_x_space_str, key_space_str)
+        stdscr.addstr(start_y + 23, start_x_s_str, key_s_str)
+        stdscr.addstr(start_y + 25, start_x_q_str, key_q_str)        
+
+
+        """
+        Code for Current Setting
+        """
+        stdscr.attron(curses.color_pair(1))
+        stdscr.addstr(start_y + 27, start_x_mode_str, mode_str)
+        stdscr.addstr(start_y + 29, start_x_setting_str, setting_str)
+        stdscr.attroff(curses.color_pair(1))
+
+        # Rendering some text
+        if_save_availbable = "Now you can save"
+        
+        if(wheel_set.drive_value_loaded == True and wheel_set.steer_value_loaded == True):
+            if_save_availbable = "Now you can save"
+        else:
+            if_save_availbable = "You cannot save"
+        
+        stdscr.addstr(0, 0, if_save_availbable, curses.color_pair(1))        
+
+        # Refresh the screen
+        stdscr.refresh()
+
+        # Wait for next input
+        k = stdscr.getch()
+
+    wheel_set.pwm_off()
+
+
+
+
+def main():
+    curses.wrapper(draw_screen2)
+
+if __name__ == "__main__":
+    main()
+

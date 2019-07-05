@@ -1,0 +1,292 @@
+'''
+**********************************************************************
+* Filename    : line_tracker_example.py
+* Description : Line Tracker Example Source Code with OpenCV (Does this really work???)
+* Author      : Byounghee Ahn
+* Brand       : MagicEco
+* Website     : www.magice.co
+* Update      : Byounghee Ahn    2019-03-24    New release
+**********************************************************************
+'''
+
+#*********************************libraries***************************************
+import sys
+sys.path.insert(0, "/home/pi/remote_control/remote_control")
+from driver import Servo
+from time import sleep
+import cv2
+#import cv2.cv as cv
+import numpy as np
+import pickle
+#from driver import camera, stream, wheels
+#import wheel_drive_calibration as wheel_drive
+from driver.PCA9685 import PWM
+#*********************************************************************************
+
+
+class LineSearch(object):
+
+    SCREEN_WIDTH = 120  # Screen width
+    SCREEN_HEIGHT = 180  # Screen Hight    
+    CENTER_X = SCREEN_WIDTH/2
+    CENTER_Y = SCREEN_HEIGHT/2
+    PAN_ANGLE_MIN = 0
+    PAN_ANGLE_MAX = 180
+    TILT_ANGLE_MIN = 20
+    TILT_ANGLE_MAX = 90
+
+    def __init__(self):
+        self.img = cv2.VideoCapture(-1)
+        self.img.set(3,LineSearch.SCREEN_WIDTH)
+        self.img.set(4,LineSearch.SCREEN_HEIGHT)
+        self.pan_servo = Servo.Servo(1)
+        self.tilt_servo = Servo.Servo(2)
+        self.current_pan_angle = 90
+        self.current_tilt_angle = 60
+
+        self.pan_servo.write(self.current_pan_angle)
+        self.tilt_servo.write(self.current_tilt_angle)
+
+    def find_blob(self, prior_x, prior_y):
+        
+        # Load input image
+        _, bgr_image = self.img.read()
+
+        # Crop the image
+        crop_image = bgr_image[60:240, 0:160]
+
+        # Convert to grayscale
+        gray = cv2.cvtColor(crop_image, cv2.COLOR_BGR2GRAY)
+
+        # Converts images from BGR to HSV
+        hsv = cv2.cvtColor(crop_image, cv2.COLOR_BGR2HSV)
+
+        # Set blue color range
+        lower_blue = np.array([110, 50, 50])
+        upper_blue = np.array([130, 255, 255])
+
+        '''
+        lower_red = np.array([160, 20, 70])
+        upper_red - np.array([190, 255, 255])
+        '''
+
+        #find the colors within the specified boundaries and apply
+        mask = cv2.inRange(hsv, lower_blue, upper_blue)
+
+        # Remain only blue color area
+        res = cv2.bitwise_and(crop_image, crop_image, mask = mask)
+
+        # Color thresholding
+        ret, thresh = cv2.threshold(mask, 60, 255, cv2.THRESH_BINARY_INV)
+
+        # Find the contours of the frame
+        contours, hierarchy = cv2.findContours(mask, 1, cv2.CHAIN_APPROX_NONE)
+
+        # Find the biggest contour (if detected)
+        if len(contours) > 0:
+
+            c = max(contours, key=cv2.contourArea)
+            M = cv2.moments(c)
+
+            # No exist contour, Use the prior coordinate
+            if M['m00'] == 0.0 :
+                cx = LineSearch.CENTER_X
+                cy = LineSearch.CENTER_Y
+
+            else :
+                cx = int(M['m10']/M['m00'])
+                cy = int(M['m01']/M['m00'])
+
+            cv2.line(crop_image,(cx,0),(cx,720),(255,0,0),1)
+            cv2.line(crop_image,(0,cy),(1280,cy),(255,0,0),1)
+            cv2.drawContours(crop_image, contours, -1, (0,255,0), 1)
+
+
+            if cx <= LineSearch.CENTER_X - 10:
+                print "[Line Check] Turn Left!"
+
+            elif cx < LineSearch.CENTER_X + 10 and cx > LineSearch.CENTER_X - 10 :
+                print "[Line check] On Track!"
+
+            elif cx >= LineSearch.CENTER_X + 10:
+                print "[Line check] Turn Right"
+
+        else:
+            print "I don't see the line"
+            cx = 0
+            cy = 0
+
+        # Display the resulting frame
+        cv2.imshow('frame',crop_image)
+        cv2.imshow('mask', mask)
+
+        if cv2.waitKey(1) & 0xFF == ord('q') :
+            print "interrupt!"
+
+        return cx, cy
+
+
+
+class WheelMove(object):
+    '''
+    This class is made to use ESC device in Raspberry Pi.
+    Becareful when you connect ESC to your Raspberry Pi board.
+    It needs very large current, it can make broken your circuit.
+    '''
+    PWM_DRIVE_MAX = 450
+    PWM_DRIVE_MIN = 280
+    PWM_DRIVE_NEUTRAL = 387
+
+    PWM_STEER_MAX = 500
+    PWM_STEER_MIN = 280
+    PWM_STEER_CENTER = 385
+    CURRENT_MODE = 2 #mode - 0 : forward, 1 : backward, 2 : Neutral, 3 : None
+
+    def __init__(self, drive_n = 367, steer_c = 385, bus_number=None, address=0x40, frequency = 60, drive_ch = 0, steer_ch = 1):
+        self.drive_ch = drive_ch 
+        self.steer_ch = steer_ch
+
+        WheelMove.PWM_DRIVE_NEUTRAL = drive_n
+        self.speed_forward = WheelMove.PWM_DRIVE_NEUTRAL
+        self.speed_backward = WheelMove.PWM_DRIVE_NEUTRAL
+        self.pwm_drive_step = 5
+
+        WheelMove.PWM_STEER_CENTER = steer_c
+        self.steer_value = WheelMove.PWM_STEER_CENTER
+        self.pwm_steer_step = 35
+
+        #PWM Init
+        self.pwm = PWM(bus_number, address)
+        self.pwm.frequency = frequency
+        self.pwm.setup()
+        sleep(0.1)
+        self.pwm.write(self.drive_ch,0,WheelMove.PWM_DRIVE_NEUTRAL)
+        self.pwm.write(self.steer_ch,0,WheelMove.PWM_STEER_CENTER)
+
+    def turn_left(self):
+        self.steer_value += self.pwm_steer_step
+        if self.steer_value > WheelMove.PWM_DRIVE_MAX:
+            self.steer_value = WheelMove.PWM_DRIVE_MAX
+        
+        self.pwm.write(self.steer_ch,0,self.steer_value)
+
+    def turn_right(self):
+        self.steer_value -= self.pwm_steer_step
+        if self.steer_value < WheelMove.PWM_DRIVE_MIN:
+            self.steer_value = WheelMove.PWM_DRIVE_MIN
+        
+        self.pwm.write(self.steer_ch,0,self.steer_value)
+
+    def set_steer_center(self):
+        self.steer_value = WheelMove.PWM_STEER_CENTER
+        self.pwm.write(self.steer_ch,0,self.steer_value)
+        sleep(0.1)
+        self.pwm.write(self.steer_ch,0,0)
+
+    def set_drive_neutral(self):
+        self.pwm.write(self.drive_ch, 0,WheelMove.PWM_DRIVE_NEUTRAL)
+        self.speed_forward = WheelMove.PWM_DRIVE_NEUTRAL
+        self.speed_backward = WheelMove.PWM_DRIVE_NEUTRAL
+        #WheelMove.CURRENT_MODE = 2
+
+    def set_drive_forward(self):
+        #WheelMove.CURRENT_MODE = 0
+        self.speed_forward = WheelMove.PWM_DRIVE_NEUTRAL+18
+        self.pwm.write(self.drive_ch, 0,self.speed_forward)
+        
+    def set_drive_backward(self):
+        #WheelMove.CURRENT_MODE = 1
+        self.speed_backward = WheelMove.PWM_DRIVE_NEUTRAL-18
+        self.pwm.write(self.drive_ch, 0,self.speed_backward)
+
+    def pwm_off(self):
+        self.pwm.write(self.drive_ch, 0,0)
+        self.pwm.write(self.steer_ch, 0,0)
+
+
+def get_stored_value():
+    try:
+        file = open('/home/pi/remote_control/remote_control/calibration_data', 'r+b')
+        drive_neutral = pickle.load(file)
+        steer_center = pickle.load(file)
+        file.close
+    except:
+        drive_neutral = 369
+        steer_center = 390
+
+    return drive_neutral, steer_center
+
+drive_n, steer_c = get_stored_value()
+line = LineSearch()
+wheel = WheelMove(drive_n, steer_c, 1, 0x40, 60, 10,11)
+
+def main():
+    x = 0
+    y = 0
+
+    print "drive :",drive_n
+    print "steer :",steer_c
+
+    while True:
+        """
+        Loop Sequence 
+        1. line check
+        2. Turn Steer
+        3. Drive Short
+        """
+        print "find line"
+        x, y = line.find_blob(x,y)
+        sleep(0.1)
+
+        """
+        print "steer center"
+        wheel.set_steer_center()
+        wheel.set_steer_center()
+        sleep(1)
+
+        print "drive forward"
+        wheel.set_drive_forward()
+        sleep(1)
+
+        print "stop"
+        wheel.set_drive_neutral()
+        sleep(1)
+
+        print "turn right"
+        wheel.turn_right()
+        wheel.turn_right()
+        sleep(1)
+
+        print "drive backward"
+        wheel.set_drive_backward()
+        sleep(1)
+
+        print "stop"
+        wheel.set_drive_neutral()
+        sleep(1)
+
+        print "steer center"
+        wheel.set_steer_center()
+        wheel.set_steer_center()
+        sleep(1)
+
+        print "turn left"
+        wheel.turn_left()
+        wheel.turn_left()
+        sleep(1)
+        """
+def destroy():
+    wheel.set_drive_neutral()
+    wheel.set_steer_center()
+    wheel.pwm_off()
+    line.img.release()
+    cv2.destroyAllWindows()
+
+if __name__ == '__main__':
+    print "Try Line Tracker Example"
+    try:
+        main()
+    except KeyboardInterrupt:
+        destroy()
+
+        
